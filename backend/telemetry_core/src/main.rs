@@ -18,6 +18,9 @@ mod aggregator;
 mod feed_message;
 mod find_location;
 mod state;
+
+use std::collections::HashMap;
+use std::io::Write;
 use std::str::FromStr;
 use tokio::time::{Duration, Instant};
 
@@ -36,6 +39,8 @@ use structopt::StructOpt;
 
 #[cfg(not(target_env = "msvc"))]
 use jemallocator::Jemalloc;
+use common::internal_messages::ShardNodeId;
+use common::node_message::Payload;
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
@@ -279,6 +284,17 @@ where
                     local_id,
                 },
                 internal_messages::FromShardAggregator::UpdateNode { payload, local_id } => {
+                    let mut metrics_file = std::fs::File::options()
+                        .append(true)
+                        .create(true)
+                        .open("metrics.json")
+                        .unwrap();
+                    let mut writer = std::io::BufWriter::new(&mut metrics_file);
+                    let mut metrics: HashMap<ShardNodeId, Payload> = HashMap::new();
+                    metrics.insert(local_id, payload.clone());
+                    serde_json::to_writer_pretty(&mut writer, &metrics).unwrap();
+                    writer.flush().unwrap();
+                    log::warn!("Local ID: {:?}, Payload: {:?}", local_id, payload);
                     FromShardWebsocket::Update { local_id, payload }
                 }
                 internal_messages::FromShardAggregator::RemoveNode { local_id } => {
@@ -431,7 +447,9 @@ where
 
             // End the loop when connection from aggregator ends:
             let msgs = match msgs {
-                Some(msgs) => msgs,
+                Some(msgs) => {
+                    // log::warn!("messages: {:?}", msgs.clone());
+                    msgs },
                 None => break,
             };
 
@@ -440,6 +458,7 @@ where
             let all_msg_bytes = msgs.into_iter().map(|msg| match msg {
                 ToFeedWebsocket::Bytes(bytes) => bytes,
             });
+            log::warn!("all_msg_bytes: {:?}", all_msg_bytes.clone());
 
             // If the feed is too slow to receive the current batch of messages, we'll drop it.
             let message_send_deadline = Instant::now() + Duration::from_secs(feed_timeout);

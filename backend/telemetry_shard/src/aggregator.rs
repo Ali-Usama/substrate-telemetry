@@ -24,6 +24,7 @@ use common::{
 use futures::{Sink, SinkExt};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicU64;
+use std::io::Write;
 use std::sync::Arc;
 
 /// A unique Id is assigned per websocket connection (or more accurately,
@@ -162,6 +163,9 @@ impl Aggregator {
         // Any messages coming from nodes that have been muted are ignored:
         let mut muted: HashSet<ShardNodeId> = HashSet::new();
 
+        // node-name to local-id mapping
+        let mut node_name_to_local_id: HashMap<ShardNodeId, Box<str>> = HashMap::new();
+
         // Now, loop and receive messages to handle.
         while let Ok(msg) = rx_from_external.recv_async().await {
             match msg {
@@ -212,6 +216,9 @@ impl Aggregator {
 
                     // Generate a new "local ID" for messages from this connection:
                     let local_id = to_local_id.assign_id((conn_id, message_id));
+                    if !node_name_to_local_id.contains_key(&local_id) {
+                        node_name_to_local_id.insert(local_id, node.name.clone());
+                    }
 
                     // Send the message to the telemetry core with this local ID:
                     let _ = tx_to_telemetry_core
@@ -303,6 +310,11 @@ impl Aggregator {
                     muted.insert(local_id);
                 }
             }
+            let node_names = std::fs::File::create("node_names.json").unwrap();
+            let mut writer = std::io::BufWriter::new(node_names);
+            serde_json::to_writer_pretty(&mut writer, &node_name_to_local_id).unwrap();
+            writer.flush().unwrap();
+            log::warn!("node to local id: {:?}", node_name_to_local_id);
         }
     }
 

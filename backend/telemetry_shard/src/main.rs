@@ -26,13 +26,14 @@ use std::{
     net::IpAddr,
     time::{Duration, Instant},
 };
+use std::io::Write;
 
 use aggregator::{Aggregator, FromWebsocket};
 use blocked_addrs::BlockedAddrs;
 use common::byte_size::ByteSize;
 use common::http_utils;
 use common::node_message;
-use common::node_message::NodeMessageId;
+use common::node_message::{NodeMessageId, Payload};
 use common::rolling_total::RollingTotalBuilder;
 use futures::{SinkExt, StreamExt};
 use http::Uri;
@@ -67,9 +68,9 @@ struct Opts {
     log_level: log::LevelFilter,
     /// Url to the Backend Core endpoint accepting shard connections
     #[structopt(
-        short = "c",
-        long = "core",
-        default_value = "ws://127.0.0.1:8000/shard_submit/"
+    short = "c",
+    long = "core",
+    default_value = "ws://127.0.0.1:8000/shard_submit/"
     )]
     core_url: Uri,
     /// How many different nodes is a given connection to the /submit endpoint allowed to
@@ -179,7 +180,7 @@ async fn start_server(opts: Opts) -> anyhow::Result<()> {
                                     block_list,
                                     stale_node_timeout,
                                 )
-                                .await;
+                                    .await;
                             log::info!(
                                 "Closing /submit connection from {:?} (address source: {})",
                                 real_addr,
@@ -215,8 +216,8 @@ async fn handle_node_websocket_connection<S>(
     block_list: BlockedAddrs,
     stale_node_timeout: Duration,
 ) -> (S, http_utils::WsSender)
-where
-    S: futures::Sink<FromWebsocket, Error = anyhow::Error> + Unpin + Send + 'static,
+    where
+        S: futures::Sink<FromWebsocket, Error=anyhow::Error> + Unpin + Send + 'static,
 {
     // Keep track of the message Ids that have been "granted access". We allow a maximum of
     // `max_nodes_per_connection` before ignoring others.
@@ -344,7 +345,28 @@ where
                 // Until the aggregator receives an `Add` message, which we can create once
                 // we see one of these SystemConnected ones, it will ignore messages with
                 // the corresponding message_id.
-                if let node_message::Payload::SystemConnected(info) = payload {
+                if let node_message::Payload::SystemConnected(info) = payload.clone() {
+
+                    log::warn!("Node validator: {:?}", info.node.name);
+                    if let Payload::HwBench(hw_bench) = payload.clone() {
+                        let data_file = std::fs::File::create("hw_bench.json").unwrap();
+                        let mut writer = std::io::BufWriter::new(data_file);
+                        serde_json::to_writer_pretty(&mut writer, &hw_bench).unwrap();
+                        writer.flush().unwrap();
+                        log::warn!("Received node message: {message_id:?}, payload: {payload:?} from {real_addr:?}", message_id = message_id, payload = hw_bench, real_addr = real_addr);
+                    }
+
+                    if let Payload::SystemInterval(interval) = payload.clone() {
+                        let data_file = std::fs::File::create("system_interval.json").unwrap();
+                        let mut writer = std::io::BufWriter::new(data_file);
+                        let mut node_details: HashMap<&str, &Option<Box<str>>> = std::collections::HashMap::new();
+                        node_details.insert("node", &info.node.validator);
+                        node_details.insert("up-time", &info.node.startup_time);
+                        serde_json::to_writer_pretty(&mut writer, &node_details).unwrap();
+                        serde_json::to_writer_pretty(&mut writer, &interval).unwrap();
+                        writer.flush().unwrap();
+                        log::warn!("Received node message: {message_id:?}, payload: {payload:?} from {node:?}", message_id = message_id, payload = interval, node = info.node.validator);
+                    }
                     // Too many nodes seen on this connection? Ignore this one.
                     if allowed_message_ids.len() >= max_nodes_per_connection {
                         log::info!("Ignoring new node with ID {message_id} from {real_addr:?} (we've hit the max of {max_nodes_per_connection} nodes per connection)");
