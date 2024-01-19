@@ -519,6 +519,9 @@ impl InnerLoop {
                     let _ = feed_channel.send(ToFeedWebsocket::Bytes(bytes));
                 }
 
+                let new_chain_id = new_chain.label();
+                log::warn!("New chain: {new_chain_id}");
+
                 // If many (eg 10k) nodes are connected, serializing all of their info takes time.
                 // So, parallelise this with Rayon, but we still send out messages for each node in order
                 // (which is helpful for the UI as it tries to maintain a sorted list of nodes). The chunk
@@ -542,6 +545,7 @@ impl InnerLoop {
                                 node,
                                 self.expose_node_details,
                             ));
+                            log::warn!("Node details: {node_id:?} {}", node.details().chain);
                             feed_serializer.push(feed_message::FinalizedBlock(
                                 node_id,
                                 node.finalized().height,
